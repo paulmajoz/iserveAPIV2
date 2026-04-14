@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, Types } from 'mongoose';
@@ -89,6 +89,9 @@ export class EventsService {
   }
 
   async findById(id: string): Promise<EventDocument> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new BadRequestException(`"${id}" is not a valid event ID`);
+    }
     const event = await this.model.findById(id).exec();
     if (!event) throw new NotFoundException(`Event ${id} not found`);
     return event;

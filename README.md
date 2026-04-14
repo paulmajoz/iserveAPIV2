@@ -2,9 +2,9 @@
 
 Unified NestJS backend for iServe — Attendance & Community Service Tracking.
 
-- **Port:** 3001 (dev) / 3001 (Docker)
+- **Port:** 3001 (Docker) — locally defaults to 3001, override with `PORT=3000 npm run start:dev`
 - **Database:** MongoDB — reuses existing `iserveza` database
-- **Swagger docs:** `http://localhost:3001/api/docs`
+- **Swagger docs:** `http://localhost:3001/api/docs` (or whichever port you are using)
 
 ---
 
@@ -45,8 +45,11 @@ npm install
 npm run start:dev
 ```
 
-The API will be available at `http://localhost:3001/api`.
+The API will be available at `http://localhost:3001/api` (or `3000` if you set `PORT=3000`).
 Swagger UI will be available at `http://localhost:3001/api/docs`.
+
+> **Tip:** If your legacy iServeAPI is already on port 3000, run V2 on 3001 (default) and
+> set `apiUrl: 'http://localhost:3001/api'` in the UI `environment.ts`.
 
 ---
 

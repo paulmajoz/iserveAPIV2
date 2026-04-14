@@ -89,6 +89,9 @@ export class AttendanceService {
   }
 
   getByEvent(eventId: string) {
+    if (!Types.ObjectId.isValid(eventId)) {
+      throw new BadRequestException(`"${eventId}" is not a valid event ID`);
+    }
     return this.model.find({ eventId: new Types.ObjectId(eventId) }).sort({ scannedAt: -1 }).exec();
   }
 
