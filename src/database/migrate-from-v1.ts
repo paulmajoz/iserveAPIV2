@@ -257,7 +257,7 @@ async function migrate() {
       const result = await V2EventModel.updateOne(
         { _id: (mapped as any)._id },
         { $setOnInsert: mapped },
-        { upsert: true },
+        { upsert: true, timestamps: false },
       );
       if (result.upsertedCount > 0) {
         eventsMigrated++;
@@ -299,7 +299,7 @@ async function migrate() {
         const result = await V2AttendanceModel.updateOne(
           { _id: (mapped as any)._id },
           { $setOnInsert: mapped },
-          { upsert: true },
+          { upsert: true, timestamps: false },
         );
         if (result.upsertedCount > 0) {
           attendMigrated++;
