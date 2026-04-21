@@ -99,9 +99,14 @@ export class EventsService {
 
   findByPerson(schoolId: string, email: string, role: string) {
     const filter: any = {};
-    if (role === 'Staff' || role === 'staff') {
+    const normRole = (role ?? '').toLowerCase();
+
+    if (normRole === 'serviceadmin') {
+      // No filter — admins see all events across all schools
+    } else if (normRole === 'staff') {
       filter.teacherEmail = new RegExp(`^${email}$`, 'i');
     } else {
+      // Student or unknown — scope to school
       filter.school = schoolId;
     }
     return this.model.find(filter).sort({ createdAt: -1 }).exec();
