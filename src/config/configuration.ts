@@ -9,4 +9,7 @@ export default () => ({
     user: process.env.SMTP_USER ?? '',
     pass: process.env.SMTP_PASS ?? '',
   },
+  ninoxApiKey: process.env.NINOX_API_KEY ?? '',
+  ninoxTeamId: process.env.NINOX_TEAM_ID ?? '',
+  ninoxDatabaseId: process.env.NINOX_DATABASE_ID ?? '',
 });

@@ -18,9 +18,12 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "seed": "bash scripts/seed.sh",
     "migrate": "ts-node -r tsconfig-paths/register src/database/migrate-from-v1.ts",
-    "regen-qr": "ts-node -r tsconfig-paths/register src/database/regen-qr-codes.ts"
+    "migrate:v2": "ts-node -r tsconfig-paths/register src/database/migrate-v1-data.ts",
+    "migrate:v2:dry": "ts-node -r tsconfig-paths/register src/database/migrate-v1-data.ts --dry-run",
+    "seed": "bash scripts/seed.sh",
+    "regen-qr": "ts-node -r tsconfig-paths/register src/database/regen-qr-codes.ts",
+    "seed-lookups": "ts-node -r tsconfig-paths/register src/database/seed-school-lookups.ts"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

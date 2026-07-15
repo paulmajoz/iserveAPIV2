@@ -5,12 +5,15 @@ import type { Attachment } from 'nodemailer/lib/mailer';
 import { QrService } from '../qr/qr.service';
 
 interface EventEmailOptions {
-  teacherEmail: string;
+  /** Recipients of the email. Must be non-empty. */
+  recipients: string[];
   teacherName: string;
   eventName: string;
   eventType: string;
   eventCategory: string;
   schoolName: string;
+  /** Optional URL — embedded in PDF + email header when set. */
+  schoolLogoUrl?: string;
   primaryColor: string;
   qrMode: 'in-out' | 'once-off';
   qrCodeInUrl: string;
@@ -47,6 +50,7 @@ export class EmailService {
       direction: opts.qrMode === 'once-off' ? 'SCAN' : 'IN',
       qrDataUrl: inDataUrl,
       schoolName: opts.schoolName,
+      schoolLogoUrl: opts.schoolLogoUrl,
       primaryColor: opts.primaryColor,
     });
 
@@ -67,6 +71,7 @@ export class EmailService {
         direction: 'OUT',
         qrDataUrl: outDataUrl,
         schoolName: opts.schoolName,
+        schoolLogoUrl: opts.schoolLogoUrl,
         primaryColor: opts.primaryColor,
       });
       attachments.push({
@@ -78,19 +83,27 @@ export class EmailService {
 
     const html = this.buildEmailHtml(opts, inDataUrl, outPdf ? await this.qr.toDataUrl(opts.qrCodeOutUrl!) : undefined);
 
+    const recipientList = (opts.recipients ?? [])
+      .map((r) => r.trim())
+      .filter((r) => r.length > 0);
+    if (recipientList.length === 0) {
+      throw new Error('No recipients supplied for event email');
+    }
+
     const mailOptions = {
       from: `"iServe" <${this.config.get('smtp.user')}>`,
-      to: [opts.teacherEmail, 'james@royalh.co.za'].join(', '),
-      subject: `iServe Event Created: ${opts.eventName}`,
+      to: recipientList.join(', '),
+      subject: `iServe Event: ${opts.eventName}`,
       html,
       attachments,
     };
 
     try {
       await transporter.sendMail(mailOptions);
-      this.logger.log(`Event email sent to ${opts.teacherEmail}`);
+      this.logger.log(`Event email sent to ${recipientList.join(', ')}`);
     } catch (err) {
       this.logger.error('Failed to send event email', err);
+      throw err;
     }
   }
 

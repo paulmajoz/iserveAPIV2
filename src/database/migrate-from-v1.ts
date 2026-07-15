@@ -1,341 +1,229 @@
 /**
- * ═══════════════════════════════════════════════════════════════
- *  iServe  —  V1 → V2 Migration Script
- *
- *  Copies old `events` + `attendances` into `v2events` + `v2attendance`
- *  while preserving every document's original _id so that all
- *  existing printed QR codes remain valid.
- *
- *  Usage:
- *    npm run migrate
- *
- *  Dry-run (inspect only, nothing written):
- *    DRY_RUN=true npm run migrate
- *
- *  SAFE TO RE-RUN — already-migrated docs are skipped via upsert.
- * ═══════════════════════════════════════════════════════════════
+ * Migration script: V1 events/attendance → v2events/v2attendance
+ * Run via: npm run migrate
  */
-
-import mongoose, { Schema, model, Types, Document } from 'mongoose';
+import * as mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import * as QRCode from 'qrcode';
 
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env.dev') });
 
-// ─────────────────────────────────────────────────────────────
-//  CONFIG  — edit these two lines if your DBs are different
-// ─────────────────────────────────────────────────────────────
-const SOURCE_URI = process.env.MONGO_URI_V1 ?? process.env.MONGO_URI ?? 'mongodb://localhost:27017/iserveza';
-const DEST_URI   = process.env.MONGO_URI    ?? 'mongodb://localhost:27017/iserveza';
-const DRY_RUN    = process.env.DRY_RUN === 'true';
-// ─────────────────────────────────────────────────────────────
+const MONGO_URI = process.env.MONGO_URI!;
+const PUBLIC_UI_BASE_URL = process.env.PUBLIC_UI_BASE_URL || 'https://iserve.royalh.co.za/new';
 
-// ── Old (V1) schemas ─────────────────────────────────────────
+// ── Schemas ──────────────────────────────────────────────────────────────────
 
-interface V1Event {
-  _id: Types.ObjectId;
-  eventName: string;
-  eventType: 'IN/OUT' | 'VOLUME' | 'IN ONLY';
-  eventCategory: string;
-  hasGeolocate?: boolean;
-  hasDescription?: boolean;
-  hasReflection?: boolean;
-  customUnitName?: string;
-  unitToHourConversion?: number;
-  teacher: string;
-  teacherEmail: string;
-  school: string;
-  qrCodeIn?: string;
-  qrCodeOut?: string;
-  createdAt?: Date;
-  updatedAt?: Date;
+const V1EventSchema = new mongoose.Schema({}, { strict: false, collection: 'events' });
+const AttServeEventSchema = new mongoose.Schema({}, { strict: false, collection: 'attserveevents' });
+const V1AttendanceSchema = new mongoose.Schema({}, { strict: false, collection: 'attendances' });
+const AttServeAttendanceSchema = new mongoose.Schema({}, { strict: false, collection: 'attserveattendances' });
+const LookupSchema = new mongoose.Schema({ name: String, schoolId: String, isActive: Boolean }, { strict: false });
+const V2EventSchema = new mongoose.Schema({}, { strict: false, collection: 'v2events' });
+const V2AttendanceSchema = new mongoose.Schema({}, { strict: false, collection: 'v2attendance' });
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function generateQR(url: string): Promise<string> {
+  return QRCode.toDataURL(url, { width: 300, margin: 2 });
 }
 
-interface V1Attendance {
-  _id: Types.ObjectId;
-  eventId: Types.ObjectId;
-  studentEmail: string;
-  studentFirstName?: string;
-  studentLastName?: string;
-  timeIn: Date;
-  timeOut?: Date;
-  locationIn?: string;
-  locationOut?: string;
-  unitAmount?: number;
-  description?: string;
-  reflection?: string;
-  hours?: number | null;
-  createdAt?: Date;
+function mapQrMode(eventType: string): string {
+  if (!eventType) return 'once-off';
+  const t = eventType.toUpperCase();
+  if (t.includes('IN') && t.includes('OUT')) return 'in-out';
+  return 'once-off';
 }
 
-const V1EventSchema = new Schema({}, { strict: false, collection: 'events' });
-const V1AttendanceSchema = new Schema({}, { strict: false, collection: 'attendances' });
-
-// ── New (V2) schemas ─────────────────────────────────────────
-
-const V2EventSchema = new Schema({
-  eventName:        String,
-  school:           String,
-  teacher:          String,
-  teacherEmail:     String,
-  qrMode:           String,
-  hourMode:         String,
-  fixedHours:       Number,
-  volumeUnitName:   String,
-  volumeConversion: Number,
-  pointsEnabled:    Boolean,
-  pointsValue:      Number,
-  captureOptions:   Object,
-  eventTypeId:      Schema.Types.ObjectId,
-  eventCategoryId:  Schema.Types.ObjectId,
-  qrCodeIn:         String,
-  qrCodeOut:        String,
-  isActive:         Boolean,
-}, { strict: false, collection: 'v2events', timestamps: true });
-
-const V2AttendanceSchema = new Schema({
-  eventId:          Schema.Types.ObjectId,
-  studentEmail:     String,
-  studentFirstName: String,
-  studentLastName:  String,
-  studentGrade:     String,
-  studentClass:     String,
-  schoolId:         String,
-  timeIn:           Date,
-  timeOut:          Date,
-  hours:            Number,
-  source:           String,
-  locationIn:       String,
-  locationOut:      String,
-  description:      String,
-  reflection:       String,
-  unitAmount:       Number,
-  pointsAwarded:    Number,
-}, { strict: false, collection: 'v2attendance', timestamps: true });
-
-// ── Field mappers ────────────────────────────────────────────
-
-/**
- * V1 eventType → V2 qrMode + hourMode
- *
- *  IN/OUT   → qrMode: in-out,    hourMode: in-out
- *  IN ONLY  → qrMode: once-off,  hourMode: disabled
- *  VOLUME   → qrMode: once-off,  hourMode: volume
- */
-function mapEventType(v1Type: string): { qrMode: string; hourMode: string } {
-  switch ((v1Type ?? '').toUpperCase().trim()) {
-    case 'IN/OUT':   return { qrMode: 'in-out',   hourMode: 'in-out'   };
-    case 'IN ONLY':  return { qrMode: 'once-off',  hourMode: 'disabled' };
-    case 'VOLUME':   return { qrMode: 'once-off',  hourMode: 'volume'   };
-    default:         return { qrMode: 'once-off',  hourMode: 'disabled' };
-  }
-}
-
-function mapEvent(v1: V1Event): object {
-  const { qrMode, hourMode } = mapEventType(v1.eventType);
-
-  return {
-    _id:          v1._id,           // ← preserve original _id (keeps QR codes valid)
-    eventName:    v1.eventName,
-    school:       String(v1.school),
-    teacher:      v1.teacher,
-    teacherEmail: v1.teacherEmail,
-    qrMode,
-    hourMode,
-    // Volume fields
-    volumeUnitName:   hourMode === 'volume' ? (v1.customUnitName ?? null) : undefined,
-    volumeConversion: hourMode === 'volume' ? (v1.unitToHourConversion ?? 1) : undefined,
-    // Points didn't exist in V1 — default off
-    pointsEnabled: false,
-    pointsValue:   0,
-    // Capture options were top-level booleans in V1
-    captureOptions: {
-      hasDescription: v1.hasDescription ?? false,
-      hasReflection:  v1.hasReflection  ?? false,
-      hasGeolocate:   v1.hasGeolocate   ?? false,
-    },
-    // QR code images — kept as-is so old printed codes still work
-    qrCodeIn:  v1.qrCodeIn  ?? null,
-    qrCodeOut: v1.qrCodeOut ?? null,
-    isActive: true,
-    // Preserve original timestamps
-    createdAt: v1.createdAt ?? new Date(),
-    updatedAt: v1.updatedAt ?? new Date(),
-  };
-}
-
-function mapAttendance(v1: V1Attendance, schoolId: string): object {
-  return {
-    _id:              v1._id,           // ← preserve original _id
-    eventId:          v1.eventId,
-    studentEmail:     (v1.studentEmail ?? '').toLowerCase().trim(),
-    studentFirstName: v1.studentFirstName ?? null,
-    studentLastName:  v1.studentLastName  ?? null,
-    schoolId,
-    timeIn:           v1.timeIn  ?? new Date(),
-    timeOut:          v1.timeOut ?? null,
-    hours:            v1.hours   ?? null,
-    source:           'self',           // V1 didn't track source — assume self
-    locationIn:       v1.locationIn   ?? null,
-    locationOut:      v1.locationOut  ?? null,
-    description:      v1.description  ?? null,
-    reflection:       v1.reflection   ?? null,
-    unitAmount:       v1.unitAmount   ?? null,
-    pointsAwarded:    0,                // V1 had no points
-    createdAt:        v1.createdAt    ?? new Date(),
-  };
-}
-
-// ── Main ─────────────────────────────────────────────────────
+// ── Main ──────────────────────────────────────────────────────────────────────
 
 async function migrate() {
-  console.log('\n' + '═'.repeat(60));
-  console.log('  iServe V1 → V2 Migration');
-  if (DRY_RUN) console.log('  ⚠️   DRY RUN — nothing will be written');
-  console.log('═'.repeat(60));
+  console.log('Connecting to MongoDB...');
+  await mongoose.connect(MONGO_URI);
+  console.log('Connected.\n');
 
-  const isSameDb = SOURCE_URI === DEST_URI;
+  const V1Event = mongoose.model('V1Event', V1EventSchema);
+  const AttServeEvent = mongoose.model('AttServeEvent', AttServeEventSchema);
+  const V1Attendance = mongoose.model('V1Attendance', V1AttendanceSchema);
+  const AttServeAttendance = mongoose.model('AttServeAttendance', AttServeAttendanceSchema);
+  const EventType = mongoose.model('EventType', LookupSchema, 'eventtypes');
+  const EventCategory = mongoose.model('EventCategory', LookupSchema, 'eventcategories');
+  const V2Event = mongoose.model('V2Event', V2EventSchema);
+  const V2Attendance = mongoose.model('V2Attendance', V2AttendanceSchema);
 
-  // Connect source
-  console.log('\n📡  Connecting to source DB…');
-  const sourceConn = await mongoose.createConnection(SOURCE_URI).asPromise();
-  console.log('    ✔ Source connected');
+  // ── Step 1: Clear v2 collections ─────────────────────────────────────────
+  console.log('Clearing v2events and v2attendance...');
+  const deletedEvents = await V2Event.deleteMany({});
+  const deletedAtt = await V2Attendance.deleteMany({});
+  console.log(`  Deleted ${deletedEvents.deletedCount} v2events`);
+  console.log(`  Deleted ${deletedAtt.deletedCount} v2attendance\n`);
 
-  // Connect destination (may be same connection)
-  let destConn: mongoose.Connection;
-  if (isSameDb) {
-    destConn = sourceConn;
-    console.log('    ✔ Destination = same database');
-  } else {
-    console.log('📡  Connecting to destination DB…');
-    destConn = await mongoose.createConnection(DEST_URI).asPromise();
-    console.log('    ✔ Destination connected');
+  // ── Step 2: Load lookup tables ────────────────────────────────────────────
+  const eventTypes = await EventType.find({});
+  const eventCategories = await EventCategory.find({});
+
+  function findTypeId(name: string): mongoose.Types.ObjectId | null {
+    const match = eventTypes.find(t => t.get('name')?.toLowerCase() === name?.toLowerCase());
+    return match ? match._id as mongoose.Types.ObjectId : null;
   }
 
-  const V1EventModel      = sourceConn.model('V1Event',      V1EventSchema);
-  const V1AttendanceModel = sourceConn.model('V1Attendance', V1AttendanceSchema);
-  const V2EventModel      = destConn.model('V2Event',        V2EventSchema);
-  const V2AttendanceModel = destConn.model('V2Attendance',   V2AttendanceSchema);
-
-  // ── Inspect source counts ──────────────────────────────
-  const totalEvents      = await V1EventModel.countDocuments();
-  const totalAttendances = await V1AttendanceModel.countDocuments();
-
-  console.log(`\n📊  Found in source:`);
-  console.log(`    ${totalEvents.toLocaleString()} events     (collection: events)`);
-  console.log(`    ${totalAttendances.toLocaleString()} attendances (collection: attendances)`);
-
-  const alreadyEvents  = await V2EventModel.countDocuments();
-  const alreadyAttend  = await V2AttendanceModel.countDocuments();
-  console.log(`\n📊  Already in destination:`);
-  console.log(`    ${alreadyEvents.toLocaleString()} events     (collection: v2events)`);
-  console.log(`    ${alreadyAttend.toLocaleString()} attendances (collection: v2attendance)`);
-
-  if (totalEvents === 0) {
-    console.log('\n⚠️   No V1 events found — is the SOURCE_URI correct?\n');
-    await sourceConn.close();
-    if (!isSameDb) await destConn.close();
-    process.exit(0);
+  function findCategoryId(name: string): mongoose.Types.ObjectId | null {
+    const match = eventCategories.find(c => c.get('name')?.toLowerCase() === name?.toLowerCase());
+    return match ? match._id as mongoose.Types.ObjectId : null;
   }
 
-  // ── Migrate events ─────────────────────────────────────
-  console.log('\n─'.repeat(60));
-  console.log('📅  Migrating events…');
+  // ── Step 3: Migrate V1 events ─────────────────────────────────────────────
+  const v1Events = await V1Event.find({});
+  console.log(`Migrating ${v1Events.length} V1 events...`);
 
-  const v1Events = await V1EventModel.find({}).lean() as unknown as V1Event[];
+  const eventIdMap = new Map<string, mongoose.Types.ObjectId>(); // old _id → new _id
 
-  // Infer schoolId from the first event (all events share one school per deployment)
-  const inferredSchoolId = String((v1Events[0] as any).school ?? '');
+  for (const e of v1Events) {
+    const oldId = (e._id as mongoose.Types.ObjectId).toString();
+    const newId = new mongoose.Types.ObjectId();
+    eventIdMap.set(oldId, newId);
 
-  let eventsMigrated = 0;
-  let eventsSkipped  = 0;
+    const qrMode = mapQrMode(e.get('eventType'));
+    const qrInUrl = `${PUBLIC_UI_BASE_URL}/submit/${newId}?direction=in`;
+    const qrOutUrl = `${PUBLIC_UI_BASE_URL}/submit/${newId}?direction=out`;
+    const qrCodeIn = await generateQR(qrInUrl);
+    const qrCodeOut = qrMode === 'in-out' ? await generateQR(qrOutUrl) : undefined;
 
-  for (const v1 of v1Events) {
-    const mapped = mapEvent(v1);
-
-    if (!DRY_RUN) {
-      const result = await V2EventModel.updateOne(
-        { _id: (mapped as any)._id },
-        { $setOnInsert: mapped },
-        { upsert: true, timestamps: false },
-      );
-      if (result.upsertedCount > 0) {
-        eventsMigrated++;
-      } else {
-        eventsSkipped++;
-      }
-    } else {
-      eventsMigrated++;
-    }
-
-    // Progress dot every 50 records
-    if ((eventsMigrated + eventsSkipped) % 50 === 0) process.stdout.write('.');
+    await V2Event.create({
+      _id: newId,
+      eventName: e.get('eventName'),
+      school: e.get('school'),
+      teacher: e.get('teacher'),
+      teacherEmail: e.get('teacherEmail'),
+      qrMode,
+      hourMode: 'in-out',
+      fixedHours: 1,
+      pointsEnabled: false,
+      pointsValue: 0,
+      captureOptions: {
+        hasDescription: e.get('hasDescription') ?? false,
+        hasReflection: e.get('hasReflection') ?? false,
+        hasGeolocate: e.get('hasGeolocate') ?? false,
+      },
+      eventTypeId: findTypeId(e.get('eventType') || 'Once-Off Attendance'),
+      eventCategoryId: findCategoryId(e.get('eventCategory') || 'In Person'),
+      isActive: true,
+      qrCodeIn,
+      ...(qrCodeOut ? { qrCodeOut } : {}),
+      createdAt: e.get('createdAt'),
+      updatedAt: e.get('updatedAt'),
+    });
   }
+  console.log(`  Migrated ${v1Events.length} V1 events\n`);
 
-  console.log(`\n    ✔ Migrated: ${eventsMigrated}  |  Skipped (already exist): ${eventsSkipped}`);
+  // ── Step 4: Migrate AttServe events ───────────────────────────────────────
+  const attEvents = await AttServeEvent.find({});
+  console.log(`Migrating ${attEvents.length} AttServe events...`);
 
-  // ── Migrate attendance ─────────────────────────────────
-  console.log('\n─'.repeat(60));
-  console.log('🙋  Migrating attendance records…');
+  for (const e of attEvents) {
+    const oldId = (e._id as mongoose.Types.ObjectId).toString();
+    const newId = new mongoose.Types.ObjectId();
+    eventIdMap.set(oldId, newId);
 
-  const BATCH = 500;
-  let attendMigrated = 0;
-  let attendSkipped  = 0;
-  let offset = 0;
+    const qrInUrl = `${PUBLIC_UI_BASE_URL}/submit/${newId}?direction=in`;
+    const qrCodeIn = await generateQR(qrInUrl);
 
-  while (true) {
-    const batch = await V1AttendanceModel
-      .find({})
-      .skip(offset)
-      .limit(BATCH)
-      .lean() as unknown as V1Attendance[];
-
-    if (batch.length === 0) break;
-
-    for (const v1 of batch) {
-      const mapped = mapAttendance(v1, inferredSchoolId);
-
-      if (!DRY_RUN) {
-        const result = await V2AttendanceModel.updateOne(
-          { _id: (mapped as any)._id },
-          { $setOnInsert: mapped },
-          { upsert: true, timestamps: false },
-        );
-        if (result.upsertedCount > 0) {
-          attendMigrated++;
-        } else {
-          attendSkipped++;
-        }
-      } else {
-        attendMigrated++;
-      }
-    }
-
-    offset += BATCH;
-    process.stdout.write(`\r    Processing: ${offset} / ${totalAttendances}`);
+    await V2Event.create({
+      _id: newId,
+      eventName: e.get('attEventName'),
+      school: e.get('school'),
+      teacher: e.get('teacher'),
+      teacherEmail: e.get('teacherEmail'),
+      qrMode: 'once-off',
+      hourMode: 'in-out',
+      fixedHours: 1,
+      pointsEnabled: false,
+      pointsValue: 0,
+      captureOptions: { hasDescription: false, hasReflection: false, hasGeolocate: false },
+      eventTypeId: findTypeId('Once-Off Attendance'),
+      eventCategoryId: findCategoryId('In Person'),
+      isActive: true,
+      qrCodeIn,
+      createdAt: e.get('createdAt'),
+      updatedAt: e.get('updatedAt'),
+    });
   }
+  console.log(`  Migrated ${attEvents.length} AttServe events\n`);
 
-  console.log(`\n    ✔ Migrated: ${attendMigrated}  |  Skipped (already exist): ${attendSkipped}`);
+  // ── Step 5: Migrate V1 attendance ─────────────────────────────────────────
+  const v1Att = await V1Attendance.find({});
+  console.log(`Migrating ${v1Att.length} V1 attendance records...`);
 
-  // ── Summary ────────────────────────────────────────────
-  console.log('\n' + '═'.repeat(60));
-  if (DRY_RUN) {
-    console.log('  DRY RUN COMPLETE — no data was written.');
-    console.log('  Remove DRY_RUN=true to run the real migration.');
-  } else {
-    console.log('  ✅  Migration complete!');
-    console.log(`  Events    : ${eventsMigrated} migrated, ${eventsSkipped} skipped`);
-    console.log(`  Attendance: ${attendMigrated} migrated, ${attendSkipped} skipped`);
-    console.log('\n  ℹ️   Old QR codes are still valid — _id values were preserved.');
-    console.log('  ℹ️   Points defaulted to 0 (not in V1). Update via the UI if needed.');
+  let migratedAtt = 0;
+  for (const a of v1Att) {
+    const oldEventId = a.get('eventId')?.toString();
+    const newEventId = oldEventId ? eventIdMap.get(oldEventId) : null;
+    if (!newEventId) continue; // skip orphaned records
+
+    await V2Attendance.create({
+      eventId: newEventId,
+      studentEmail: a.get('studentEmail'),
+      studentFirstName: a.get('studentFirstName'),
+      studentLastName: a.get('studentLastName'),
+      studentGrade: a.get('studentGrade') || '',
+      studentClass: a.get('studentClass') || '',
+      schoolId: a.get('schoolId') || 0,
+      timeIn: a.get('timeIn'),
+      timeOut: a.get('timeOut'),
+      hours: a.get('hours') || 0,
+      pointsAwarded: a.get('pointsAwarded') || 0,
+      direction: a.get('direction') || 'in',
+      source: a.get('source') || 'self',
+      description: a.get('description'),
+      reflection: a.get('reflection'),
+      createdAt: a.get('createdAt'),
+      updatedAt: a.get('updatedAt'),
+    });
+    migratedAtt++;
   }
-  console.log('═'.repeat(60) + '\n');
+  console.log(`  Migrated ${migratedAtt} / ${v1Att.length} V1 attendance records\n`);
 
-  await sourceConn.close();
-  if (!isSameDb) await destConn.close();
+  // ── Step 6: Migrate AttServe attendance ───────────────────────────────────
+  const attAtt = await AttServeAttendance.find({});
+  console.log(`Migrating ${attAtt.length} AttServe attendance records...`);
+
+  let migratedAttServe = 0;
+  for (const a of attAtt) {
+    const oldEventId = a.get('eventId')?.toString();
+    const newEventId = oldEventId ? eventIdMap.get(oldEventId) : null;
+    if (!newEventId) continue;
+
+    await V2Attendance.create({
+      eventId: newEventId,
+      studentEmail: a.get('studentEmail'),
+      studentFirstName: a.get('studentFirst') || a.get('studentFirstName'),
+      studentLastName: a.get('studentLast') || a.get('studentLastName'),
+      studentGrade: a.get('studentGrade') || '',
+      studentClass: a.get('studentClass') || '',
+      schoolId: a.get('schoolId') || 0,
+      timeIn: a.get('scannedAt') || a.get('timeIn'),
+      hours: 0,
+      pointsAwarded: 0,
+      direction: 'in',
+      source: a.get('source') || 'self',
+      createdAt: a.get('createdAt'),
+      updatedAt: a.get('updatedAt'),
+    });
+    migratedAttServe++;
+  }
+  console.log(`  Migrated ${migratedAttServe} / ${attAtt.length} AttServe attendance records\n`);
+
+  // ── Summary ───────────────────────────────────────────────────────────────
+  const finalEvents = await V2Event.countDocuments();
+  const finalAtt = await V2Attendance.countDocuments();
+  console.log('=== Migration Complete ===');
+  console.log(`  v2events:     ${finalEvents}`);
+  console.log(`  v2attendance: ${finalAtt}`);
+
+  await mongoose.disconnect();
 }
 
-migrate().catch((err) => {
-  console.error('\n❌  Migration failed:', err.message ?? err);
+migrate().catch(err => {
+  console.error('Migration failed:', err);
   process.exit(1);
 });

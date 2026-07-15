@@ -53,6 +53,20 @@ export class School {
 
   @Prop({ type: Object, default: {} })
   honoursTargetHours: Record<string, number>;
+
+  /**
+   * School-specific event departments, each optionally containing subcategories.
+   * Replaces the old flat string[] — see migrate-dept-subcategories.js.
+   */
+  @Prop({
+    type: [{ name: { type: String }, subcategories: { type: [String] } }],
+    default: [],
+  })
+  departments: { name: string; subcategories: string[] }[];
+
+  /** Legacy flat category list — kept for backward compatibility but no longer returned by getLookup(). */
+  @Prop({ type: [String], default: [] })
+  categories: string[];
 }
 
 export const SchoolSchema = SchemaFactory.createForClass(School);

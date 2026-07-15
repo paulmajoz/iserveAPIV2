@@ -16,6 +16,11 @@ export class Attendance {
   @Prop() studentId?: string;
   @Prop() studentGrade?: string;
   @Prop() studentClass?: string;
+  @Prop() studentHouse?: string;
+  @Prop() studentTutor?: string;
+  @Prop() customField1?: string;
+  @Prop() customField2?: string;
+  @Prop() customField3?: string;
   @Prop() schoolId?: string;
 
   @Prop({ default: Date.now })
@@ -32,6 +37,11 @@ export class Attendance {
 
   @Prop() locationIn?: string;
   @Prop() locationOut?: string;
+
+  /** Distance (in metres) from event.geoTarget at scan time. Null when not measured. */
+  @Prop({ type: Number, default: null }) distanceMeters?: number | null;
+  /** True when the captured location was within event.geoTarget.radiusMeters. */
+  @Prop({ type: Boolean, default: null }) withinPerimeter?: boolean | null;
   @Prop() description?: string;
   @Prop() reflection?: string;
   @Prop() unitAmount?: number;

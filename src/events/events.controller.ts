@@ -1,11 +1,19 @@
 import {
   Body, Controller, Delete, Get, Param, Patch, Post, Query, Res,
 } from '@nestjs/common';
-import { ApiTags, ApiQuery } from '@nestjs/swagger';
+import { IsArray, IsEmail, ArrayMinSize, IsOptional } from 'class-validator';
+import { ApiTags, ApiQuery, ApiProperty } from '@nestjs/swagger';
 import { Response } from 'express';
 import { EventsService } from './events.service';
 import { CreateEventDto } from './create-event.dto';
 import { Event } from './event.schema';
+
+class SendEmailDto {
+  /** One or more recipient email addresses. */
+  @ApiProperty({ type: [String], required: false })
+  @IsOptional() @IsArray() @ArrayMinSize(1) @IsEmail({}, { each: true })
+  recipients?: string[];
+}
 
 @ApiTags('Events')
 @Controller('events')
@@ -65,7 +73,7 @@ export class EventsController {
   }
 
   @Post(':id/send-email')
-  sendEmail(@Param('id') id: string) {
-    return this.service.sendEmail(id);
+  sendEmail(@Param('id') id: string, @Body() body: SendEmailDto = {}) {
+    return this.service.sendEmail(id, body.recipients);
   }
 }

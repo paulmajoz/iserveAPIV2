@@ -7,6 +7,7 @@ import { EventsModule } from '../events/events.module';
 import { EventTypesModule } from '../event-types/event-types.module';
 import { EventCategoriesModule } from '../event-categories/event-categories.module';
 import { SchoolsModule } from '../schools/schools.module';
+import { NinoxModule } from '../ninox/ninox.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { SchoolsModule } from '../schools/schools.module';
     EventTypesModule,
     EventCategoriesModule,
     SchoolsModule,
+    NinoxModule,
   ],
   controllers: [AttendanceController],
   providers: [AttendanceService],

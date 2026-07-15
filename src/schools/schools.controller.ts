@@ -20,12 +20,24 @@ export class SchoolsController {
 
   @Get('id/:schoolId')
   findOne(@Param('schoolId') schoolId: string) {
+    console.log('schoolId :>> ', schoolId);
     return this.service.findBySchoolId(+schoolId);
   }
 
   @Get('id/:schoolId/theme')
   getTheme(@Param('schoolId') schoolId: string) {
     return this.service.getTheme(+schoolId);
+  }
+
+  @Get('id/:schoolId/lookup')
+  getLookup(@Param('schoolId') schoolId: string) {
+    return this.service.getLookup(+schoolId);
+  }
+
+  /** Distinct people associated with this school — teachers + students. */
+  @Get('id/:schoolId/contacts')
+  getContacts(@Param('schoolId') schoolId: string) {
+    return this.service.getContacts(+schoolId);
   }
 
   @Patch('id/:schoolId')
