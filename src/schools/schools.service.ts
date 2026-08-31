@@ -43,7 +43,12 @@ export class SchoolsService {
   async getLookup(schoolId: number) {
     const school = await this.findBySchoolId(schoolId);
     return {
-      departments: (school.departments ?? []) as { name: string; subcategories: string[] }[],
+      departments: (school.departments ?? []).map((d) => ({
+        name: d.name,
+        subcategories: (d.subcategories ?? []).map((s: any) =>
+          typeof s === 'string' ? s : s.name,
+        ),
+      })),
     };
   }
 

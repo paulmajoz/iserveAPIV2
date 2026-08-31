@@ -467,6 +467,28 @@ export class AttendanceService {
     const pointsByCategory:   Record<string, number> = {};
     const eventsByDepartment: Record<string, number> = {};
 
+    // Nested department -> subcategory breakdown (fixes hoursByCategory /
+    // pointsByCategory above collapsing same-named subcategories that live
+    // under different departments).
+    interface SubcategoryBreakdown {
+      name: string;
+      hours: number;
+      points: number;
+      hoursLimit?: number;
+      pointsLimit?: number;
+    }
+    interface DepartmentBreakdown {
+      name: string;
+      hours: number;
+      points: number;
+      subcategories: SubcategoryBreakdown[];
+    }
+    const departmentBreakdownMap = new Map<string, {
+      hours: number;
+      points: number;
+      subcategories: Map<string, { hours: number; points: number }>;
+    }>();
+
     // Legacy V1 aggregations — still populated for backward compat with any
     // consumer that hasn't migrated to the new department/category names.
     const hoursByType: Record<string, number> = {};
@@ -487,15 +509,28 @@ export class AttendanceService {
 
       eventsByDepartment[dept] = (eventsByDepartment[dept] ?? 0) + 1;
 
+      if (!departmentBreakdownMap.has(dept)) {
+        departmentBreakdownMap.set(dept, { hours: 0, points: 0, subcategories: new Map() });
+      }
+      const deptEntry = departmentBreakdownMap.get(dept)!;
+      if (!deptEntry.subcategories.has(cat)) {
+        deptEntry.subcategories.set(cat, { hours: 0, points: 0 });
+      }
+      const subEntry = deptEntry.subcategories.get(cat)!;
+
       if (points > 0) {
         pointsByDepartment[dept] = (pointsByDepartment[dept] ?? 0) + points;
         pointsByCategory[cat]    = (pointsByCategory[cat]    ?? 0) + points;
+        deptEntry.points += points;
+        subEntry.points  += points;
       }
 
       if (rec.hours) {
         totalHours += rec.hours;
         hoursByDepartment[dept] = (hoursByDepartment[dept] ?? 0) + rec.hours;
         hoursByCategory[cat]    = (hoursByCategory[cat]    ?? 0) + rec.hours;
+        deptEntry.hours += rec.hours;
+        subEntry.hours  += rec.hours;
 
         // ── Legacy V1 type / category lookups (kept for compatibility) ──
         try {
@@ -516,16 +551,47 @@ export class AttendanceService {
       }
     }
 
-    // Get school targets if schoolId provided
+    // Get school targets + subcategory limits if schoolId provided
     let gradeTargetHours: Record<string, number> = {};
     let honoursTargetHours: Record<string, number> = {};
+    let schoolDepartments: { name: string; subcategories: { name: string; hoursLimit?: number; pointsLimit?: number }[] }[] = [];
     if (schoolId) {
       const school = await this.schools.findBySchoolId(+schoolId).catch(() => null);
       if (school) {
         gradeTargetHours = school.gradeTargetHours ?? {};
         honoursTargetHours = school.honoursTargetHours ?? {};
+        schoolDepartments = (school.departments ?? []) as typeof schoolDepartments;
       }
     }
+
+    const findLimits = (deptName: string, subName: string): { hoursLimit?: number; pointsLimit?: number } => {
+      const dept = schoolDepartments.find(
+        (d) => (d.name ?? '').trim().toLowerCase() === deptName.trim().toLowerCase(),
+      );
+      if (!dept) return {};
+      const sub = (dept.subcategories ?? []).find(
+        (s: any) => (typeof s === 'string' ? s : s.name ?? '').trim().toLowerCase() === subName.trim().toLowerCase(),
+      ) as any;
+      if (!sub || typeof sub === 'string') return {};
+      return {
+        hoursLimit: sub.hoursLimit ?? undefined,
+        pointsLimit: sub.pointsLimit ?? undefined,
+      };
+    };
+
+    const departmentBreakdown: DepartmentBreakdown[] = Array.from(departmentBreakdownMap.entries()).map(
+      ([deptName, deptEntry]) => ({
+        name: deptName,
+        hours: deptEntry.hours,
+        points: deptEntry.points,
+        subcategories: Array.from(deptEntry.subcategories.entries()).map(([subName, subEntry]) => ({
+          name: subName,
+          hours: subEntry.hours,
+          points: subEntry.points,
+          ...findLimits(deptName, subName),
+        })),
+      }),
+    );
 
     return {
       studentEmail: email,
@@ -542,6 +608,10 @@ export class AttendanceService {
       pointsByDepartment,
       pointsByCategory,
       eventsByDepartment,
+
+      // Nested breakdown (department -> subcategories), with per-subcategory
+      // hours/points limits attached where the school has configured one.
+      departmentBreakdown,
 
       // Targets
       gradeTargetHours,
