@@ -11,6 +11,20 @@ import { EventCategoriesService } from '../event-categories/event-categories.ser
 import { SchoolsService } from '../schools/schools.service';
 import { NinoxService } from '../ninox/ninox.service';
 
+export interface SubcategoryBreakdown {
+  name: string;
+  hours: number;
+  points: number;
+  hoursLimit?: number;
+  pointsLimit?: number;
+}
+export interface DepartmentBreakdown {
+  name: string;
+  hours: number;
+  points: number;
+  subcategories: SubcategoryBreakdown[];
+}
+
 @Injectable()
 export class AttendanceService {
   constructor(
@@ -470,19 +484,6 @@ export class AttendanceService {
     // Nested department -> subcategory breakdown (fixes hoursByCategory /
     // pointsByCategory above collapsing same-named subcategories that live
     // under different departments).
-    interface SubcategoryBreakdown {
-      name: string;
-      hours: number;
-      points: number;
-      hoursLimit?: number;
-      pointsLimit?: number;
-    }
-    interface DepartmentBreakdown {
-      name: string;
-      hours: number;
-      points: number;
-      subcategories: SubcategoryBreakdown[];
-    }
     const departmentBreakdownMap = new Map<string, {
       hours: number;
       points: number;
