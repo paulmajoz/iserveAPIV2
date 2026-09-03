@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, Schema as MongooseSchema } from 'mongoose';
 
 export type SchoolDocument = School & Document;
 
@@ -57,25 +57,27 @@ export class School {
   /**
    * School-specific event departments, each optionally containing subcategories.
    * Replaces the old flat string[] — see migrate-dept-subcategories.js.
-   * Subcategories carry optional hours/points limits — see migrate-subcategory-limits.js.
+   *
+   * Subcategories can be either a plain string (pre-migration schools) or an
+   * object carrying optional hours/points limits — see
+   * migrate-subcategory-limits.js. `Mixed` is used deliberately here instead
+   * of a strict nested-object schema: Mongoose would otherwise try to cast
+   * every element against the object shape and silently drop any school's
+   * subcategories that are still plain strings, returning `[]` even though
+   * the underlying data is intact. Callers (schools.service.ts getLookup(),
+   * attendance.service.ts findLimits()) already normalize both shapes with
+   * `typeof s === 'string' ? s : s.name`.
    */
   @Prop({
     type: [{
       name: { type: String },
-      subcategories: {
-        type: [{
-          name: { type: String },
-          hoursLimit: { type: Number },
-          pointsLimit: { type: Number },
-        }],
-        default: [],
-      },
+      subcategories: { type: [MongooseSchema.Types.Mixed], default: [] },
     }],
     default: [],
   })
   departments: {
     name: string;
-    subcategories: { name: string; hoursLimit?: number; pointsLimit?: number }[];
+    subcategories: (string | { name: string; hoursLimit?: number; pointsLimit?: number })[];
   }[];
 
   /** Legacy flat category list — kept for backward compatibility but no longer returned by getLookup(). */
