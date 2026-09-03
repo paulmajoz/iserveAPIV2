@@ -7,6 +7,7 @@ import { EventTypesModule } from './event-types/event-types.module';
 import { EventCategoriesModule } from './event-categories/event-categories.module';
 import { EventsModule } from './events/events.module';
 import { AttendanceModule } from './attendance/attendance.module';
+import { LegacyModule } from './legacy/legacy.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { AttendanceModule } from './attendance/attendance.module';
     EventCategoriesModule,
     EventsModule,
     AttendanceModule,
+    LegacyModule,
   ],
 })
 export class AppModule {}
